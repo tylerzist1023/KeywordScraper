@@ -2,15 +2,14 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/gocolly/colly"
 	"github.com/tylerzist1023/KeywordScraper/cmd/scraper"
 )
 
@@ -24,27 +23,103 @@ func getLine(r *bufio.Reader) (string, error) {
 	return str, nil
 }
 
+func worker(id int, terms <-chan string, h2s chan<- map[string][]string, wg *sync.WaitGroup) {
+	wg.Add(1)
+	for term := range terms {
+		fmt.Printf("Worker %d started job for term \"%s\"\n", id, term)
+		h2 := scraper.ScrapeBingForArticles(term, 5, 5)
+		h2["term"] = append(h2["term"], term)
+		h2s <- h2
+		fmt.Printf("Worker %d finished job for term \"%s\"\n", id, term)
+	}
+	fmt.Printf("Worker %d is done\n", id)
+	wg.Done()
+}
+
+func receiver(h2s <-chan map[string][]string, wg *sync.WaitGroup) {
+	wg.Add(1)
+
+	filename := fmt.Sprintf("headers_%d", time.Now().UnixMilli())
+	file, err := os.Create(filename)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+
+	header_count, article_count := 0, 0
+
+	file.WriteString("{ \"data\": [")
+	for h2 := range h2s {
+		json_str, err := json.Marshal(h2)
+		if err != nil {
+			log.Fatal(err)
+		}
+		_, err = file.Write(json_str)
+		for k,v := range h2 {
+			if k == "term" {
+				continue
+			}
+			article_count++
+			header_count += len(v)
+		}
+		if err != nil {
+			log.Fatal(err)
+		}
+		file.WriteString(",")
+	}
+	file.Seek(-1, 2)
+
+	end := fmt.Sprintf("], \"article_count\":%d, \"header_count\":%d }", article_count, header_count)
+	file.WriteString(end)
+
+	wg.Done()
+}
+
 func main() {
-	fmt.Print("Type your query: ");
-	
-	reader := bufio.NewReader(os.Stdin)
-	q, err := getLine(reader)
+	if len(os.Args) == 1 {
+		os.Exit(0)
+	}
+
+	file, err := os.Open(os.Args[1])
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer file.Close()
 
-	fmt.Print("Type how many articles you want to scrape: ");
-	article_num_str, err := getLine(reader)
-	if err != nil {
+	term_chan := make(chan string)
+	h2s_chan := make(chan map[string][]string)
+
+	scanner := bufio.NewScanner(file)
+
+	var wg_workers sync.WaitGroup
+	var wg_receivers sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		go worker(i, term_chan, h2s_chan, &wg_workers)
+	}
+	go receiver(h2s_chan, &wg_receivers)
+
+	num_lines := 0
+	for scanner.Scan() {
+		text := scanner.Text()
+		text = strings.TrimSuffix(text, "\r\n")
+		text = strings.TrimSuffix(text, "\n")
+
+		if len(text) == 0 {
+			continue
+		}
+
+		//fmt.Println(num_lines, text)
+		term_chan <- text
+
+		num_lines++
+	}
+	if err := scanner.Err(); err != nil {
 		log.Fatal(err)
 	}
-	article_num, err := strconv.ParseInt(article_num_str, 10, 0)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	url := fmt.Sprintf("https://www.bing.com/search?q=%s", url.QueryEscape(q))
-	fmt.Println(url)
+	close(term_chan)
+	wg_workers.Wait()
 
-	scraper.ScrapeBingForArticles(q, article_num)
+	close(h2s_chan)
+	wg_receivers.Wait()
 }
