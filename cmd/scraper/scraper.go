@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,9 +30,19 @@ func ScrapeBingForArticles(q string, article_num int, timeout_seconds int) map[s
 
 				e.ForEach("h2", func(_ int, e3 *colly.HTMLElement) {
 					//fmt.Printf("\n%s\n", e3.Text)
-					mut.Lock()
-					h2s[url] = append(h2s[url], e3.Text)
-					mut.Unlock()
+
+					text := e3.Text
+					text = strings.Join(strings.Split(text, "\xa0"), "")
+					text = strings.Join(strings.Split(text, "\t"), "")
+					text = strings.TrimSpace(text)
+					text = strings.Join(strings.Split(text, "\ufffd"), "")
+					text = strings.Replace(text, "\ufffd", "", -1)
+					text = strings.Replace(text, "\\ufffd", "", -1)
+					if len(text) != 0 {
+						mut.Lock()
+						h2s[url] = append(h2s[url], text)
+						mut.Unlock()
+					}					
 				})
 
 				mut.Lock()

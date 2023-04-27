@@ -28,8 +28,10 @@ func worker(id int, terms <-chan string, h2s chan<- map[string][]string, wg *syn
 	for term := range terms {
 		fmt.Printf("Worker %d started job for term \"%s\"\n", id, term)
 		h2 := scraper.ScrapeBingForArticles(term, 5, 5)
-		h2["term"] = append(h2["term"], term)
-		h2s <- h2
+		if len(h2) != 0 {
+			h2["term"] = append(h2["term"], term)
+			h2s <- h2
+		}
 		fmt.Printf("Worker %d finished job for term \"%s\"\n", id, term)
 	}
 	fmt.Printf("Worker %d is done\n", id)
@@ -50,11 +52,13 @@ func receiver(h2s <-chan map[string][]string, wg *sync.WaitGroup) {
 
 	file.WriteString("{ \"data\": [")
 	for h2 := range h2s {
-		json_str, err := json.Marshal(h2)
+		json_raw, err := json.MarshalIndent(h2, "", "    ")
 		if err != nil {
 			log.Fatal(err)
 		}
-		_, err = file.Write(json_str)
+		json_str := strings.Replace(string(json_raw), "\\ufffd", "", -1)
+		json_str = strings.Replace(json_str, "\\u0026", "&", -1)
+		_, err = file.WriteString(json_str)
 		for k,v := range h2 {
 			if k == "term" {
 				continue
@@ -112,6 +116,7 @@ func main() {
 		term_chan <- text
 
 		num_lines++
+		fmt.Printf("Read line %d: \"%s\"\n", num_lines, text)
 	}
 	if err := scanner.Err(); err != nil {
 		log.Fatal(err)
